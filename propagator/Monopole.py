@@ -2,6 +2,9 @@ import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
 
+def linear_stopping_power(density,stop_power):
+    return 0.1*density*stop_power
+
 def pos_ode(direction):
     drds =  direction
     return drds
@@ -37,7 +40,7 @@ class Monopole:
         self.stopping_work = stop_work
         self.momentum = np.sqrt(self.totalEnergy**2-self.mass**2)*direction
 
-    def propagate(self,magnetic_field, stop_power,limit):
+    def propagate(self,magnetic_field, stop_power,density,limit):
         
         def ode(s, y):
             position = y[:3]
@@ -45,7 +48,7 @@ class Monopole:
             p= np.linalg.norm(y[3:6])
             beta= p/np.sqrt(p**2+self.mass**2)
             mag_field = magnetic_field(position)
-            stopping_power = stop_power(position)
+            stopping_power = linear_stopping_power(density(position),stop_power)
             dpds = mom_ode(mag_field, stopping_power, direction, self.charge, beta)
             drds = pos_ode(direction)
             mag_work = mag_work_ode(mag_field,direction,self.charge)
@@ -58,8 +61,11 @@ class Monopole:
         self.position = sol.y[:3, -1]
         self.momentum = sol.y[3:6, -1]
         self.magnetic_work = sol.y[6,-1]
+        print(self.magnetic_work)
         self.stopping_work = sol.y[7, -1]
+
         p=np.linalg.norm(self.momentum)
+
         self.beta = p/np.sqrt(p**2+self.mass**2)
         self.lorentzFactor = 1/np.sqrt(1-self.beta**2)
         self.totalEnergy = self.lorentzFactor * self.mass
