@@ -2,8 +2,13 @@ import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
 
-def linear_stopping_power(density,stop_power):
-    return 0.1*density*stop_power
+# ODEs and miscellaneous calcuations for the propagation.
+
+def get_stopping_power(density,stop_power,beta):
+    if callable(stop_power):
+        return 0.1*density*stop_power(beta)
+    else:
+        return 0.1*density*stop_power
 
 def pos_ode(direction):
     drds =  direction
@@ -21,13 +26,11 @@ def stop_work_ode(stop_power):
     work = stop_power
     return work
 
-# The idea is: You create a monopole object, then this same monopole
-# can be propagated for different conditions, without the need for new code.
-# This should allow us to study the effects of the magnetic field and 
-# the atmosphere quite easily.
-
 class Monopole:
     def __init__(self, beta, position, direction, mass,charge, mag_work=0, stop_work=0):
+
+        # The monopole properties are set here. This will be changed as the monopole is propagated.
+
         self.lorentzFactor = 1/np.sqrt(1-beta**2)
         self.beta = beta
         self.totalEnergy = self.lorentzFactor * mass
@@ -40,6 +43,10 @@ class Monopole:
         self.stopping_work = stop_work
         self.momentum = np.sqrt(self.totalEnergy**2-self.mass**2)*direction
 
+    # Making the propagation a method of the monopole class makes it so the same monopole, with the
+    # same initial properties, can be propagated for different conditions. 
+    # This should make things considerably easier for the different tests. 
+
     def propagate(self,magnetic_field, stop_power,density,limit):
         
         def ode(s, y):
@@ -48,7 +55,15 @@ class Monopole:
             p= np.linalg.norm(y[3:6])
             beta= p/np.sqrt(p**2+self.mass**2)
             mag_field = magnetic_field(position)
-            stopping_power = linear_stopping_power(density(position),stop_power)
+
+            # Should accommodate for both the tests with constant stopping power and 
+            # the actual simulation with beta dependent stopping power.
+
+            stopping_power = get_stopping_power(density(position),stop_power,beta)
+
+            # In order to keep track of the particle properties, we solve for 8 quantities. 
+            # This WILL make bigger simulation slower.
+
             dpds = mom_ode(mag_field, stopping_power, direction, self.charge, beta)
             drds = pos_ode(direction)
             mag_work = mag_work_ode(mag_field,direction,self.charge)
@@ -58,10 +73,12 @@ class Monopole:
         y0 = np.concatenate((self.position, self.momentum, [self.magnetic_work, self.stopping_work]))
         sol = solve_ivp(ode, [0, limit], y0, method='DOP853')
 
+        # The idea is for the propagation to be done in small chunks, allowing us to check the postion of the particle 
+        # (whether it has arrived on earth). The particle properties are updated after each stretch.
+
         self.position = sol.y[:3, -1]
         self.momentum = sol.y[3:6, -1]
         self.magnetic_work = sol.y[6,-1]
-        print(self.magnetic_work)
         self.stopping_work = sol.y[7, -1]
 
         p=np.linalg.norm(self.momentum)
