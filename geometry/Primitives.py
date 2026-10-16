@@ -21,6 +21,12 @@ def cartesian_to_spherical(x,y,z):
     phi=np.arctan2(y,x)
     return r,theta,phi
 
+# These are the primitives that will be used to create our earth model. The idea is that we 
+# have shells, which can be used to represent both the Earth's strata and the atmosphere, 
+# with support for changes in elevation, and spheres, which can be used to represent the Earth
+# as solid. For an initial evaluation, since monopoles are not very penetrating, Earth can be 
+# made using a sphere with variable radius given by DEMs and the atmosphere as a shell enveloping
+# it, with variable density.
 
 class SphereShell:
     def __init__(self,position,radius,thickness,density=0,stop_power=0):
@@ -61,14 +67,14 @@ class SphereShell:
         else:
             return self.radius
 
-    def checkInside(self,check):
+    def isInside(self,check):
         if callable(self.radius):
             relative_position=check-self.position
             x,y,z=relative_position
             r,theta,phi=cartesian_to_spherical(x,y,z)
-            return self.radius(theta,phi)>r and (self.radius(theta,phi)-self.thickness)<r
+            return self.radius(theta,phi)>=r and (self.radius(theta,phi)-self.thickness)<=r
         else: 
-            return self.radius>np.linalg.norm(self.position-check) and (self.radius-self.thickness)<r
+            return self.radius>=np.linalg.norm(self.position-check) and (self.radius-self.thickness)<=r
 
 
 class Sphere:
@@ -109,14 +115,17 @@ class Sphere:
         else:
             return self.radius
 
-    def checkInside(self,check):
+    def isInside(self,check):
         if callable(self.radius):
             relative_position=check-self.position
             x,y,z=relative_position
             r,theta,phi=cartesian_to_spherical(x,y,z)
-            return self.radius(theta,phi)>r
+            return self.radius(theta,phi)>=r
         else: 
-            return self.radius>np.linalg.norm(self.position-check)
+            return self.radius>=np.linalg.norm(self.position-check)
+
+# The block class is the ugly son, and is meant to provide us with a propagation space for
+# simulation. As a result, it has no support for height maps.
 
 class Block:
     def __init__(self,position,dimensions,density=0,stop_power=0):
@@ -154,10 +163,25 @@ class Block:
         self.density=density
         self.stop_power=stop_power
 
+    def getDensity(self,position=0):
+        relative_position=position-self.position
+        x,y,z=relative_position
+        if callable(self.density):
+            return self.density(x,y,z)
+        else:
+            return self.density
+
+    def getStopPower(self,beta=0):
+        if callable(self.stop_power):
+            return self.stop_power(beta)
+        else:
+            return self.stop_power
+
+    
     def setRadius(self,radius): 
         self.radius=radius
 
-    def checkInside(self,check):
+    def isInside(self,check):
         check=check-self.position
         vertex_temp=self.vertexes-self.position
 
