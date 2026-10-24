@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
+from scipy.constants import c,hbar,e
 
-# ODEs and miscellaneous calcuations for the propagation.
+# ODEs and miscellaneous calculations for the propagation.
 
 def get_stopping_power(density,stop_power,beta):
     if callable(stop_power):
@@ -47,6 +48,31 @@ class Monopole:
     # same initial properties, can be propagated for different conditions. 
     # This should make things considerably easier for the different tests. 
 
+    def setPosition(self,position):
+        self.position=position
+
+    def setBeta(self,beta):
+        self.lorentzFactor=1/np.sqrt(1-beta**2)
+        self.beta=beta
+        self.totalEnergy=self.lorentzFactor * self.mass
+        self.kineticEnergy= self.totalEnergy - self.mass
+        self.momentum=np.sqrt(self.totalEnergy**2-self.mass**2)*self.direction
+
+    def setDirection(self,direction):
+        self.direction=direction
+
+    def setMagWork(self,magwork):
+        self.magnetic_work=magwork
+
+    def setStopWork(self,stopwork):
+        self.stopping_work=stopwork
+
+    def setCharge(self,charge):
+        self.charge=charge
+
+    def setMass(self,mass):
+        self.mass=mass
+    
     def propagate(self,magnetic_field, stop_power,density,limit):
         
         def ode(s, y):
@@ -58,8 +84,10 @@ class Monopole:
 
             # Should accommodate for both the tests with constant stopping power and 
             # the actual simulation with beta dependent stopping power.
-
-            stopping_power = get_stopping_power(density(position),stop_power,beta)
+            if callable(stop_power):
+                stopping_power=stop_power(position,beta,self.charge)
+            else:
+                stopping_power = stop_power#get_stopping_power(density(position),stop_power,beta)
 
             # In order to keep track of the particle properties, we solve for 8 quantities. 
             # This WILL make bigger simulation slower.
@@ -70,8 +98,14 @@ class Monopole:
             stop_work = stop_work_ode(stopping_power)
             return np.concatenate((drds, dpds, [mag_work, stop_work]))
 
+        def stopped(s, y):
+            p = np.linalg.norm(y[3:6])
+            return p/np.sqrt(p**2 + self.mass**2) - 1e-6    # beta - beta_stop
+        stopped.terminal = True
+        stopped.direction = -1
+
         y0 = np.concatenate((self.position, self.momentum, [self.magnetic_work, self.stopping_work]))
-        sol = solve_ivp(ode, [0, limit], y0, method='DOP853')
+        sol = solve_ivp(ode, [0, limit], y0, method='DOP853',events=stopped)
 
         # The idea is for the propagation to be done in small chunks, allowing us to check the postion of the particle 
         # (whether it has arrived on earth). The particle properties are updated after each stretch.
