@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
-
+from Material import Material 
+ 
 def vertex(dimensions,position):
     vertexes=[]
     length,width,height=dimensions
@@ -29,35 +30,48 @@ def cartesian_to_spherical(x,y,z):
 # it, with variable density.
 
 class SphereShell:
-    def __init__(self,position,radius,thickness,density=0,stop_power=0):
+    def __init__(self,position,radius,thickness,material=None):
         self.radius=radius
         self.thickness=thickness
         self.position=position
-        self.density=density
-        self.stop_power=stop_power
+
+        # Every primitive must be declared with a material that composes it. 
+        # The two classes are complementary, as the material class holds the density,
+        # but doesn't know how to read it, and the primitive knows how to read the density,
+        # but not what it is.
+
+        self.material=material
 
     def moveTo(self,position):
         self.position=position
 
-    def setMaterial(self,density,stop_power):
-        self.density=density
-        self.stop_power=stop_power
+    def setMaterial(self,material):
+        self.material=material
 
-    def getDensity(self,position):
-        if callable(self.density):
-            relative_position=position-self.position
-            x,y,z=relative_position
+    # Make sure to correctly inform the function of which coordinate system your 
+    # density function (and consequently your stopping power) uses, as failure to do 
+    # so may result in runtime errors or the wrong output
+
+    def getDensity(self,position,coord_system="Spherical"):
+        relative_position=position-self.position
+        x,y,z=relative_position
+        if coord_system=="Spherical":
             r,theta,phi=cartesian_to_spherical(x,y,z)
-            return self.density(r,theta,phi)
+            position=(r,theta,phi)
         else:
-            return self.density
-
-    def getStopPower(self,beta=0):
-        if callable(self.stop_power):
-            return self.stop_power(beta)
-        else:
-            return self.stop_power
+            position=(x,y,z)
+        return self.material.getDensity(*position)
         
+    def getStopPower(self,position,beta,charge,coord_system="Spherical"):
+        relative_position=position-self.position
+        x,y,z=relative_position
+        if coord_system=="Spherical":
+            r,theta,phi=cartesian_to_spherical(x,y,z)
+            position=(r,theta,phi)
+        else:
+            position=(x,y,z)
+        return self.material.getStopPower(position,beta,charge)
+    
     def setRadius(self,radius):
         self.radius=radius
 
@@ -67,44 +81,52 @@ class SphereShell:
         else:
             return self.radius
 
+    # These functions are the life and blood of the propagator, as the SimulationVolume
+    # class uses them to check which density, and consequently stopping power, to return
+    # to the propagator itself. As these are not really meant to be used by the user, 
+    # but rather by the propagator, they assume the coordinate system and do the conversion
+ 
     def isInside(self,check):
+        relative_position=check-self.position
+        x,y,z=relative_position
+        r,theta,phi=cartesian_to_spherical(x,y,z)
         if callable(self.radius):
-            relative_position=check-self.position
-            x,y,z=relative_position
-            r,theta,phi=cartesian_to_spherical(x,y,z)
             return self.radius(theta,phi)>=r and (self.radius(theta,phi)-self.thickness)<=r
         else: 
             return self.radius>=np.linalg.norm(self.position-check) and (self.radius-self.thickness)<=r
 
 
 class Sphere:
-    def __init__(self,position,radius,density=0,stop_power=0):
+    def __init__(self,position,radius,material=None):
         self.radius=radius
         self.position=position
-        self.density=density
-        self.stop_power=stop_power
+        self.material=material
 
     def moveTo(self,position):
         self.position=position
 
-    def setMaterial(self,density,stop_power):
-        self.density=density
-        self.stop_power=stop_power
+    def setMaterial(self,material):
+        self.material=material
 
-    def getDensity(self,position):
-        if callable(self.density):
-            relative_position=position-self.position
-            x,y,z=relative_position
+    def getDensity(self,position,coord_system="Spherical"):
+        relative_position=position-self.position
+        x,y,z=relative_position
+        if coord_system=="Spherical":
             r,theta,phi=cartesian_to_spherical(x,y,z)
-            return self.density(r,theta,phi)
+            position=(r,theta,phi)
         else:
-            return self.density
+            position=(x,y,z)
+        return self.material.getDensity(*position)
 
-    def getStopPower(self,beta=0):
-        if callable(self.stop_power):
-            return self.stop_power(beta)
+    def getStopPower(self,position,beta,charge,coord_system="Spherical"):
+        relative_position=position-self.position
+        x,y,z=relative_position
+        if coord_system=="Spherical":
+            r,theta,phi=cartesian_to_spherical(x,y,z)
+            position=(r,theta,phi)
         else:
-            return self.stop_power
+            position=(x,y,z)
+        return self.material.getStopPower(position,beta,charge)
 
     def setRadius(self,radius):
         self.radius=radius
@@ -128,12 +150,11 @@ class Sphere:
 # simulation. As a result, it has no support for height maps.
 
 class Block:
-    def __init__(self,position,dimensions,density=0,stop_power=0):
+    def __init__(self,position,dimensions,material=None):
         self.dimensions=dimensions
         self.position=position
-        self.density=density
-        self.orientation=np.array([0,0,0])
-        self.stop_power=stop_power
+        self.material=material
+        self.orientation=np.array([0.0,0.0,0.0])
         self.vertexes=vertex(dimensions,position)
         self.rotation_history=[]
 
@@ -159,25 +180,29 @@ class Block:
         self.position=position
         self.vertexes=vertex(self.dimensions,position)
 
-    def setMaterial(self,density,stop_power):
-        self.density=density
-        self.stop_power=stop_power
+    def setMaterial(self,material):
+        self.material=material
 
-    def getDensity(self,position=0):
+    def getDensity(self,position,coord_system="Cartesian"):
         relative_position=position-self.position
         x,y,z=relative_position
-        if callable(self.density):
-            return self.density(x,y,z)
+        if coord_system=="Spherical":
+            r,theta,phi=cartesian_to_spherical(x,y,z)
+            position=(r,theta,phi)
         else:
-            return self.density
-
-    def getStopPower(self,beta=0):
-        if callable(self.stop_power):
-            return self.stop_power(beta)
-        else:
-            return self.stop_power
-
+            position=(x,y,z)
+        return self.material.getDensity(*position)
     
+    def getStopPower(self,position,beta,charge,coord_system="Cartesian"):
+        relative_position=position-self.position
+        x,y,z=relative_position
+        if coord_system=="Spherical":
+            r,theta,phi=cartesian_to_spherical(x,y,z)
+            position=(r,theta,phi)
+        else:
+            position=(x,y,z)
+        return self.material.getStopPower(position,beta,charge)
+
     def setRadius(self,radius): 
         self.radius=radius
 
