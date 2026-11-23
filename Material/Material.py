@@ -2,7 +2,9 @@ import numpy as np
 from scipy.constants import hbar,c,e,h,mu_0,electron_volt,electron_mass,epsilon_0
 from scipy.interpolate import CubicSpline
 from Presets import presets
-from StopPowerCalculator import *
+from StopPowerCalculator import *   
+from Compare import compare_varattr
+from Serialization import *
 
 #########################################################################################
 #                                   Material Class                                      #
@@ -27,16 +29,53 @@ class Material:
         self.density=density
         self.interpolator=None
 
+    def __eq__(self, other):
+        # Comparison method to be used for finding the Earth's surface
+        # more easily for breaking the propagation
+
+        if self.preset is not None and other.preset is not None:
+            equal_composition = self.preset==other.preset
+        else:
+            equal_composition = self.composition==other.composition
+
+        equal_density=compare_varattr(self.density,other.density)
+
+        return equal_composition and equal_density
+    
     # The getDensity module is called through one of the object classes, which take the 
     # position in the appropriate coordinate system. In order to avoid issues with the 
     # coordinates, it is ill advised to call this method directly.
     
-    def getDensity(self,*kwargs):
+    # In order for the code to work, the density must be defined as a function (NOT LAMBDA,
+    # otherwise pickling will fail) that takes each coordinate separately, regardless of 
+    # the coordinate system to be used.
+
+    def getDensity(self,*args):
+        coords1,coords2,coords3=args
+
         if callable(self.density):
-            return self.density(*kwargs)
+            densities=[]
+
+            for coord1,coord2,coord3 in zip(coords1,coords2,coords3):
+                densities.append(self.density(coord1,coord2,coord3))
+            densities=np.array(densities)
+            if len(densities)==1:
+                return densities[0]
+            else:
+                return np.array(densities)
+        
         else:
-            return self.density
-    
+            if len(coords1)==1:
+                return self.density
+            else:
+                return np.repeat(self.density,len(coords1)) 
+
+    def getDensityType(self):
+        if callable(self.density):
+            return "Variable"
+        else:
+            return "Constant"
+
     def getElecDensity(self,position):
         elec_density=0
 
@@ -111,6 +150,10 @@ class Material:
     # mathematical models
 
     def getStopPower(self,position,beta,charge):
+
+        if self.preset=="Vacuum" or self.density==0 or np.all(presets.items()==0):
+            return 0
+        
         if beta<1e-4:
             return giacomelli(self.getAtDensity(position))
         
@@ -120,21 +163,18 @@ class Material:
 
         elif self.preset=="Air":
             return bartlett(beta,charge,self.getDensity(*position))
+        
         else:   
+
             if beta<0.01:
                 return ahlen_kinoshita(self.getElecDensity(position),beta,charge)
+            
             elif beta>=0.1:
                 return bethe(self.getElecDensity(position),beta,charge,self.getExcEnergy(),self.getDenCorrection(position,beta))
+            
             else:
-                ak=np.linspace(1e-4,1e-2,1000)
-                bb=np.linspace(1e-1,np.nextafter(1.0, 0.0),100)
-                betas=[]
-                SP=[]
-                for B in ak:
-                    betas.append(B)
-                    SP.append(ahlen_kinoshita(self.getElecDensity(position),B,charge))
-                for B in bb:
-                    betas.append(B)
-                    SP.append(bethe(self.getElecDensity(position),B,charge,self.getExcEnergy(),self.getDenCorrection(position,B)))
-                return np.interp(beta,betas,SP)         
+                elec_density=self.getElecDensity(position)
+                ak=ahlen_kinoshita(elec_density,1e-2,charge)
+                bb=bethe(elec_density,1e-1,charge,self.getExcEnergy(),self.getDenCorrection(position,1e-1))
+                return np.interp(beta,[1e-2,1e-1],[ak,bb])         
 
